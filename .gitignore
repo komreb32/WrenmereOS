@@ -1,0 +1,12 @@
+# build dir
+build/
+example/
+
+# object and binary files
+*.d
+*.o
+*.so
+*.iso
+*.img
+*.a
+*.bin
