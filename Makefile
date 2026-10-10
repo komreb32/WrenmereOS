@@ -109,8 +109,7 @@ run: img
 	qemu-system-x86_64 -m 1G -drive file=$(DiskImg),format=raw,if=ide
 
 cloc:
-	@cloc kernel boot include tools --exclude-dir=__pycache__
-
+	@cloc kernel boot include --exclude-dir=__pycache__,tools,docs
 clean:
 	@$(MAKE) --no-print-directory -C boot clean
 	@$(MAKE) --no-print-directory -C kernel clean

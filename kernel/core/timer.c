@@ -3,6 +3,7 @@
 #include <kernel/core/timer.h>
 #include <kernel/idt/idt.h>
 #include <kernel/io/io.h>
+#include <proc/sched.h>
 
 #define PitOscFreq         1193182u
 #define PitChannel0Data    0x40
@@ -26,8 +27,8 @@ static void TimerCallback(InterruptFrame *frame)
     (void)frame;
 
     TickCount++;
-
-    // scheduler tick and sleeper wake ups belong here once sched/ exists
+    if (SchedIsActive())
+        SchedTick();
 }
 
 void TimerInit(int hz)
@@ -68,6 +69,11 @@ uint64_t TimerGetTicks(void)
     return TickCount;
 }
 
+uint32_t TimerGetTicksPerSecond(void)
+{
+    return TicksPerSecond;
+}
+
 uint64_t TimerUptimeMs(void)
 {
     uint64_t Frequency;
@@ -97,7 +103,15 @@ uint64_t TimerUptimeMs(void)
 // sleeps for at least ms milliseconds, halting until the timer wakes us
 void TimerSleepMs(uint32_t ms)
 {
-    if (TicksPerSecond == 0 || ms == 0)
+    if (ms == 0)
+        return;
+
+    if (SchedIsActive()) {
+        SleepCurrentMs(ms);
+        return;
+    }
+
+    if (TicksPerSecond == 0)
         return;
 
     if (!IrqEnabled())

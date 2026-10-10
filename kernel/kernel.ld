@@ -30,6 +30,14 @@ SECTIONS
     .rodata : AT(ADDR(.rodata) - KernelVirtBase) {
         *(.rodata)
         *(.rodata.*)
+        /* Fault-recovery table for usercopy.S: (fault RIP, fixup RIP)
+         * pairs, 8-byte aligned. SORT keeps ExtableFind()'s binary search
+         * valid no matter which object contributes entries. */
+        . = ALIGN(8);
+        ExtableStart = .;
+        KEEP(*(SORT(.extable)))
+        KEEP(*(SORT(.extable.*)))
+        ExtableEnd = .;
     } :rodata
 
     .data : AT(ADDR(.data) - KernelVirtBase) {

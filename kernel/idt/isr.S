@@ -18,23 +18,29 @@ IsrStub\vector:
     jmp IsrCommon
 .endm
 
-# shared interrupt handler, the pushes must match InterruptFrame
+# shared interrupt handler, matching TrapFrame layout from docs/abi.md
 IsrCommon:
-    pushq %r15
-    pushq %r14
-    pushq %r13
-    pushq %r12
-    pushq %r11
-    pushq %r10
-    pushq %r9
-    pushq %r8
-    pushq %rbp
-    pushq %rdi
-    pushq %rsi
-    pushq %rdx
-    pushq %rcx
-    pushq %rbx
+    # Check saved CS: if RPL 3, swapgs before touching GS
+    testb $3, 24(%rsp)
+    jz 1f
+    swapgs
+1:
+    # Save registers in TrapFrame order (lowest address R15 .. Rax)
     pushq %rax
+    pushq %rbx
+    pushq %rcx
+    pushq %rdx
+    pushq %rsi
+    pushq %rdi
+    pushq %rbp
+    pushq %r8
+    pushq %r9
+    pushq %r10
+    pushq %r11
+    pushq %r12
+    pushq %r13
+    pushq %r14
+    pushq %r15
 
     cld
 
@@ -42,24 +48,31 @@ IsrCommon:
     movq %rsp, %rdi
     call IrqDispatch
 
-    popq %rax
-    popq %rbx
-    popq %rcx
-    popq %rdx
-    popq %rsi
-    popq %rdi
-    popq %rbp
-    popq %r8
-    popq %r9
-    popq %r10
-    popq %r11
-    popq %r12
-    popq %r13
-    popq %r14
+    # Restore registers in reverse order
     popq %r15
+    popq %r14
+    popq %r13
+    popq %r12
+    popq %r11
+    popq %r10
+    popq %r9
+    popq %r8
+    popq %rbp
+    popq %rdi
+    popq %rsi
+    popq %rdx
+    popq %rcx
+    popq %rbx
+    popq %rax
 
     # drop the vector and the error code
     addq $16, %rsp
+
+    # Check saved CS right before iretq: if RPL 3, swapgs back to user GS
+    testb $3, 8(%rsp)
+    jz 2f
+    swapgs
+2:
     iretq
 
 # cpu exceptions (0-31); in 64-bit mode 21, 29 and 30 push an error code too

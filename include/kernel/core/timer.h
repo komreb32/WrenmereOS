@@ -10,5 +10,6 @@ int TimerStart(int hz);
 uint64_t TimerGetTicks(void);
 uint64_t TimerUptimeMs(void);
 void TimerSleepMs(uint32_t ms);
+uint32_t TimerGetTicksPerSecond(void);
 
 #endif

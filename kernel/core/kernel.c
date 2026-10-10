@@ -10,7 +10,31 @@
 #include <kernel/idt/idt.h>
 #include <kernel/mm/mm.h>
 #include <memlayout.h>
+#include <percpu.h>
+#include <process.h>
+#include <proc/sched.h>
+#include <syscall.h>
 #include "../archive/exf/exf.h"
+
+#define VgaRow24 ((volatile uint16_t *)(uintptr_t)(0xB8000 + 24 * 80 * 2))
+
+static void WriterA(uint64_t Arg)
+{
+    (void)Arg;
+    for (;;) {
+        VgaRow24[0] = (uint16_t)((0x0A << 8) | 'A');
+        SleepCurrentMs(1000);
+    }
+}
+
+static void WriterB(uint64_t Arg)
+{
+    (void)Arg;
+    for (;;) {
+        VgaRow24[1] = (uint16_t)((0x0C << 8) | 'B');
+        SleepCurrentMs(1000);
+    }
+}
 
 static uint8_t ChunkBuffer[4096];
 
@@ -44,10 +68,14 @@ static const char *DetectFilesystem(BlockDevice *dev, uint64_t *StartLbaOut)
     return "Unknown";
 }
 
+void CpuFeaturesEnable(void);
+
 // No C prologue may touch the BIOS stack before we switch RSP. A normal
 // call below establishes SysV's 16-byte stack alignment for KernelMain.
 __attribute__((naked, noreturn)) void KernelEntry(const BootInfo *Info)
 {
+    CpuFeaturesEnable();
+    SyscallInit();
     __asm__ volatile (
         "cli\n\t"
         "leaq KernelBootStackTop(%rip), %rsp\n\t"
@@ -76,6 +104,7 @@ __attribute__((used, noinline, noreturn)) static void KernelMain(const BootInfo 
     KPrintln("");
 
     KStatus("GDT loaded: kernel code 0x08, data 0x10", GdtInit() == 0);
+    PerCpuInit();
     KStatus("IDT loaded: 256 gates, 48 stubs", IdtStart() == 0);
     KStatus("PIC remapped: IRQ 0-15 -> vectors 0x20-0x2F", PicInit() == 0);
     KStatus("PIT timer running at 100 Hz on IRQ0", TimerStart(100) == 0);
@@ -229,8 +258,22 @@ __attribute__((used, noinline, noreturn)) static void KernelMain(const BootInfo 
         }
     }
 
+    SchedInit();
+    {
+        Process *Kp = CurrentProcess();
+        Thread *Ta;
+        Thread *Tb;
+
+        Ta = ThreadCreateKernel(Kp, (uint64_t)(uintptr_t)WriterA, 0);
+        Tb = ThreadCreateKernel(Kp, (uint64_t)(uintptr_t)WriterB, 0);
+        if (Ta != 0)
+            SchedAdd(Ta);
+        if (Tb != 0)
+            SchedAdd(Tb);
+    }
+
     IrqEnable();
 
     for (;;)
-        KPut((char)KeyboardGetChar()); // echo the typed keys
+        Yield();
 }

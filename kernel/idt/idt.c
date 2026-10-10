@@ -5,6 +5,12 @@
 #include <kernel/gdt/gdt.h>
 #include <kernel/idt/idt.h>
 #include <kernel/io/io.h>
+#include <process.h>
+#include <syscall.h>
+
+// #PF entry point (kernel/idt/pagefault.c). Takes TrapFrame*: same tail
+// layout as InterruptFrame*, only the shared fields are touched.
+void PageFaultHandler(TrapFrame *Frame);
 
 // 8259 PIC ports and commands
 #define Pic1Command 0x20
@@ -96,15 +102,25 @@ static void CpuPanic(InterruptFrame *frame)
     Panic(Reason, frame);
 }
 
-static void IdtSetGate(int vector, uint64_t address)
+void IdtSetGate(int vector, void *handler, uint8_t ist, uint8_t dpl, uint8_t tipo)
 {
-    Idt[vector].OffsetLow  = address & 0xFFFF;
-    Idt[vector].Selector   = KernelCodeSelector;
-    Idt[vector].Ist        = 0;
-    Idt[vector].TypeAttr   = 0x8E;
-    Idt[vector].OffsetMid  = (address >> 16) & 0xFFFF;
-    Idt[vector].OffsetHigh = (address >> 32) & 0xFFFFFFFF;
+    if (vector < 0 || vector >= InterruptVectorCount)
+        return;
+
+    uint64_t address = (uint64_t)(uintptr_t)handler;
+
+    Idt[vector].OffsetLow  = (uint16_t)(address & 0xFFFF);
+    Idt[vector].Selector   = SelKernelCode;
+    Idt[vector].Ist        = (uint8_t)(ist & 0x07);
+    Idt[vector].TypeAttr   = (uint8_t)(0x80 | ((dpl & 3) << 5) | (tipo & 0x0F));
+    Idt[vector].OffsetMid  = (uint16_t)((address >> 16) & 0xFFFF);
+    Idt[vector].OffsetHigh = (uint32_t)((address >> 32) & 0xFFFFFFFF);
     Idt[vector].Reserved   = 0;
+}
+
+void IdtSetUserGate(int vector, void *handler)
+{
+    IdtSetGate(vector, handler, 0, 3, IdtTypeInterrupt);
 }
 
 // fallback for unused vectors so they cannot crash us
@@ -138,11 +154,21 @@ void IdtInit(void)
 
     // vectors 0-47 get real stubs (exceptions + pic lines)
     for (i = 0; i < StubCount; i++)
-        IdtSetGate(i, (uint64_t)(uintptr_t)StubTable[i]);
+    {
+        uint8_t ist = 0;
+        if (i == 8)
+            ist = 1;      // #DF (Double Fault)
+        else if (i == 2)
+            ist = 2;      // NMI
+        else if (i == 18)
+            ist = 3;      // #MC (Machine Check)
+
+        IdtSetGate(i, (void *)StubTable[i], ist, 0, IdtTypeInterrupt);
+    }
 
     // vectors 48-255 get the bare placeholder
     for (; i < InterruptVectorCount; i++)
-        IdtSetGate(i, (uint64_t)(uintptr_t)StubPlaceholder);
+        IdtSetGate(i, (void *)StubPlaceholder, 0, 0, IdtTypeInterrupt);
 
     Idtr.Limit = (uint16_t)(sizeof(Idt) - 1);
     Idtr.Base  = (uint64_t)(uintptr_t)Idt;
@@ -216,6 +242,16 @@ void IrqDispatch(InterruptFrame *frame)
 {
     uint64_t vec = frame->Vector;
 
+    // #PF (vector 14) has its own handler: demand-paging for ring 3 and
+    // .extable fixups for ring 0. It takes TrapFrame*, whose tail
+    // (Vector,Error,rip,cs,rflags,rsp,ss) matches InterruptFrame*, and it
+    // only touches those shared fields, so the cast is safe.
+    if (vec == 14)
+    {
+        PageFaultHandler((TrapFrame *)frame);
+        return;
+    }
+
     if (vec < IrqBase)
         CpuPanic(frame);
 
@@ -265,7 +301,8 @@ void IrqDispatch(InterruptFrame *frame)
         OutByte(Pic2Command, PicEoi);
     OutByte(Pic1Command, PicEoi);
 
-    // a handler-requested preemption goes here once sched/ exists
+    if ((frame->cs & 3ULL) == 3ULL)
+        ProcessCheckDying();
 }
 
 void IrqDisable(void)
